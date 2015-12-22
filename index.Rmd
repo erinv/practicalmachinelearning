@@ -1,0 +1,115 @@
+---
+title: "Prediction of Exercise Performance Using Sensor Data"
+author: "Erin V."
+date: "December 21, 2015"
+output: html_document
+---
+```{r, echo=TRUE, results='hide'}
+library(ggplot2)
+library(parallel)
+library(caret)
+library(lattice)
+library(gbm)
+library(survival)
+library(splines)
+library(plyr)
+```
+##Training Data
+
+This report describes a model built to predict how well individuals perform a biceps curl using sensor data. First, the training and validation data are downloaded:
+
+```{r}
+#Download the training data
+download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv",
+              destfile="pml-training.csv", method="auto")
+
+```
+
+Inspection of the training data revealed that many columns contained values of "#DIV/0" and missing data.  Since columns with much missing data would not be expected to contribute to the model, these were removed and all remaining variables recoded to numeric format (with the exception of the classification variable, "classe"). Columns such as the exerciser's name and time stamp were also discarded.
+
+```{r, warning=FALSE}
+#Read in training data 
+sensordata <- read.csv("pml-training.csv", na.strings = c("#DIV/0", ""))
+#Remove columns 1-7
+sensordata <- sensordata[,8:160]
+#Convert to numeric (except classification)
+for (i in 1:152) {sensordata[, i] = as.numeric(as.character(sensordata[,i]))}
+#Keep only the complete columns
+to_keep <- colnames(sensordata[colSums(is.na(sensordata))==0])
+sensordata <- sensordata[to_keep]
+```
+Ultimately, `r length(to_keep) - 1` columns were kept as potential model features:
+```{r, echo=FALSE}
+to_keep
+```
+Next, a portion (20 percent) of the data were held back in order to estimate the out of sample error rate:
+```{r,}
+inTrain <- createDataPartition(y=sensordata$classe, p=0.8, list = FALSE)
+training <- sensordata[inTrain,]
+testing <- sensordata[-inTrain,]
+```
+
+A stochastic gradient boosting method was selected to train the model as it seemed appropriate for the large number of potential features.  
+```{r, cache=TRUE}
+set.seed(1234)
+trc <- trainControl(allowParallel = TRUE)
+theModel <- train(classe ~ ., method="gbm", data=training, verbose=FALSE, trControl=trc)
+```
+
+The resulting model is summarized here:
+```{r, echo=FALSE}
+print(theModel)
+```
+Applying the trained model to the training data gives the following results when predicting the exercise classification:
+```{r}
+predict1 <- predict(theModel, training)
+confusionMatrix(predict1, training$classe)
+```
+
+While the accuracy is quite high when applied to the training data, a better estimate of accuracy is obtained when applying the model to the testing data set:
+
+```{r,}
+predict2 <- predict(theModel, testing)
+confusionMatrix(predict2, testing$classe)
+```
+
+Since the accuracy of the model when applied to the testing data was also high, it was decided to test the model against the validation training set as described below.
+
+##Model Validation
+
+First, the validation data were downloaded and prepared.
+```{r}
+#Download validation data
+download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv",
+              destfile="pml-testing.csv", method="auto")
+
+#Prepare validation data frame
+#Read in training data 
+valdata <- read.csv("pml-testing.csv")
+#Remove columns 1-7
+valdata <- valdata[,8:160]
+#Convert to numeric (except classification)
+for (i in 1:152) {valdata[, i] = as.numeric(as.character(valdata[,i]))}
+
+```
+
+Next, the trained model was applied to the twenty cases in the evaulation data set:
+```{r}
+
+#Define file writing function
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+
+answers <- predict(theModel, newdata=valdata)
+
+#write answer files
+pml_write_files(answers)
+```
+All twenty of the validation cases were correctly classified by the model.  In conclusion, while the model is not very interpretable, it does seem to be a useful prediction tool.
+
+Further development of separate models using data from the different types (belt, arm, forearm, and dumbbell) of sensors would be useful.  In practice a user would likely wear only one type of sensor to track exercise performance and it would be useful to know which type gives the most accurate predictions.
